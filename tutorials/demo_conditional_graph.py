@@ -37,7 +37,14 @@ class Model(object):
 
 
 if __name__ == '__main__':
-    tf.enable_eager_execution()
+    import argparse
+
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--eager', action='store_true')
+    options = parser.parse_args()
+
+    if options.eager:
+        tf.enable_eager_execution()
 
     random.seed(11)
     num_batches = 10  # This can be any number.
@@ -53,10 +60,16 @@ if __name__ == '__main__':
 
     batch_iterator = FixedLengthBatchIterator(data, rng=np.random.RandomState(121), batch_size=np_batch_size)
 
-    ds = tf.data.Dataset.from_generator(lambda: iter(batch_iterator), output_types=tf.float32, output_shapes=(None, None, input_dim),)
+    if options.eager:
+        ds = tf.data.Dataset.from_generator(lambda: iter(batch_iterator), output_types=tf.float32, output_shapes=(None, None, input_dim),)
+        ds = ds.repeat().batch(1)
 
     tf_graph = tf.Graph()
     with tf_graph.as_default():
+        if not options.eager:
+            ds = tf.data.Dataset.from_generator(lambda: iter(batch_iterator), output_types=tf.float32, output_shapes=(None, None, input_dim),)
+            ds = ds.repeat().batch(1)
+
         projection = tf.keras.layers.Dense(hidden_dim)
         compose = tf.keras.layers.Dense(hidden_dim)
         model_table = {k: Model(length=k, compose=compose, projection=projection, hidden_dim=hidden_dim, input_dim=input_dim)
@@ -66,7 +79,18 @@ if __name__ == '__main__':
     with tf.Session(graph=tf_graph) as sess:
         sess.run(init)
 
-    for i, batch in enumerate(ds.repeat().batch(1).take(num_batches)):
-        batch = tf.squeeze(batch, axis=0)
-        length = batch.shape[1].value
-        output = model_table[length](batch)['output']
+    if options.eager:
+        for i, batch in enumerate(ds.take(num_batches)):
+            batch = tf.squeeze(batch, axis=0)
+            length = batch.shape[1].value
+            output = model_table[length](batch)['output']
+            print(i, output.shape)
+    else:
+        with tf.Session(graph=tf_graph) as sess:
+            next_item = ds.make_one_shot_iterator().get_next()
+            for i in range(num_batches):
+                batch = sess.run(next_item)
+                batch = tf.squeeze(batch, axis=0)
+                length = batch.shape[1].value
+                output = model_table[length](batch)['output']
+                print(i, output.shape)
